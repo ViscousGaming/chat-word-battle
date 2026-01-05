@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8" />
+  <title>Overlay Bridge</title>
+</head>
+
+<body style="margin:0; background:transparent; overflow:hidden">
+
+  <!-- Load YOUR existing overlay -->
+  <iframe
+    id="overlay"
+    src="https://viscousgaming.github.io/chat-word-overlay/game.html"
+    style="width:100vw; height:100vh; border:none;">
+  </iframe>
+
+  <script>
+    const iframe = document.getElementById("overlay");
+
+    // Connect to your Railway backend
+    const ws = new WebSocket("wss://YOUR-RAILWAY-APP.up.railway.app");
+
+    ws.onopen = () => {
+      console.log("Overlay bridge connected to server");
+    };
+
+    ws.onmessage = (event) => {
+      const data = JSON.parse(event.data);
+      iframe.contentWindow.postMessage(data, "*");
+    };
+
+    ws.onerror = (err) => {
+      console.error("WebSocket error:", err);
+    };
+  </script>
+
+</body>
+</html>
