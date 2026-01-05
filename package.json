@@ -1,0 +1,14 @@
+{
+  "name": "chat-word-battle",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "tmi.js": "^1.8.5",
+    "ws": "^8.17.0",
+    "bad-words": "^3.0.4",
+    "node-fetch": "^3.3.2"
+  }
+}
