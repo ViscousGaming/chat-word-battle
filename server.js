@@ -1,3 +1,11 @@
+process.on("unhandledRejection", err => {
+  console.error("Unhandled rejection:", err);
+});
+
+process.on("uncaughtException", err => {
+  console.error("Uncaught exception:", err);
+});
+
 import express from "express";
 import { WebSocketServer } from "ws";
 import { WordGame } from "./game.js";
