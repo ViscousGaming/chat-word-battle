@@ -1,4 +1,3 @@
-import fetch from "node-fetch";
 import { isClean } from "./profanity.js";
 
 const MIN_LEN = 5;
