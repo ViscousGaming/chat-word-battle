@@ -7,7 +7,6 @@
 
 <body style="margin:0; background:transparent; overflow:hidden">
 
-  <!-- Load YOUR existing overlay -->
   <iframe
     id="overlay"
     src="https://viscousgaming.github.io/chat-word-overlay/game.html"
@@ -17,14 +16,14 @@
   <script>
     const iframe = document.getElementById("overlay");
 
-    // Connect to your Railway backend
-    const ws = new WebSocket("wss://YOUR-RAILWAY-APP.up.railway.app");
+    const ws = new WebSocket("wss://chat-word-battle.up.railway.app");
 
     ws.onopen = () => {
       console.log("Overlay bridge connected to server");
     };
 
     ws.onmessage = (event) => {
+      console.log("BRIDGE RECEIVED:", event.data);
       const data = JSON.parse(event.data);
       iframe.contentWindow.postMessage(data, "*");
     };
