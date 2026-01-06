@@ -54,7 +54,7 @@ let revealTimer = null;
 let roundTimeout = null;
 let countdownTimer = null;
 
-/* 🏆 LEADERBOARD */
+/* 🏆 RESET EVERY STREAM */
 const leaderboard = {}; // { username: score }
 
 /* =========================
@@ -64,7 +64,7 @@ const leaderboard = {}; // { username: score }
 let twitchSay = () => {};
 
 /* =========================
-   START CHAT CLIENTS
+   START CHAT
 ========================= */
 
 startTwitch((platform, user, msg, say) => {
@@ -87,7 +87,7 @@ function getLeaderboard() {
 
 function leaderboardText() {
   const top = getLeaderboard();
-  if (top.length === 0) return "🏆 Leaderboard is empty.";
+  if (top.length === 0) return "🏆 Game leaderboard is empty.";
 
   return (
     "🏆 Game Leaderboard: " +
@@ -111,8 +111,7 @@ async function startRound() {
   send("winner", { name: "" });
   send("countdown", { seconds: 0 });
 
-  const totalLetters = game.word.length;
-  const hiddenLetters = totalLetters - 2;
+  const hiddenLetters = game.word.length - 2;
 
   const calculatedInterval =
     hiddenLetters > 0 ? ROUND_DURATION / hiddenLetters : ROUND_DURATION;
@@ -134,9 +133,7 @@ async function startRound() {
   }, revealInterval);
 
   roundTimeout = setTimeout(() => {
-    if (!roundEnded) {
-      endRound(null);
-    }
+    if (!roundEnded) endRound(null);
   }, ROUND_DURATION);
 
   function endRound(winner) {
@@ -149,9 +146,7 @@ async function startRound() {
     currentWordText = game.word;
     send("word", { value: currentWordText });
 
-    if (winner) {
-      send("winner", { name: winner });
-    }
+    if (winner) send("winner", { name: winner });
 
     let remaining = 30;
     send("countdown", { seconds: remaining });
@@ -200,7 +195,7 @@ function onChat(platform, user, msg) {
     return;
   }
 
-  /* 🔥 RENAMED COMMAND */
+  /* 🏆 LEADERBOARD COMMAND */
   if (msg === "!gamelb") {
     twitchSay(leaderboardText());
     return;

@@ -11,14 +11,12 @@ export function startTwitch(onMessage) {
 
   client.connect();
 
-  // 🔊 expose say() to server
   const say = (msg) => {
     client.say(process.env.TWITCH_CHANNEL, msg);
   };
 
   client.on("message", (_, tags, message, self) => {
     if (self) return;
-
     onMessage("twitch", tags.username, message, say);
   });
 }
