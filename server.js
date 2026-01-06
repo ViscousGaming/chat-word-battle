@@ -11,7 +11,7 @@ import { getSafeEnglishWord } from "./wordSource.js";
 
 const ROUND_DURATION = 180000;      // 3 minutes
 const AFTER_REVEAL_DELAY = 30000;   // 30s before next word
-const MIN_REVEAL_INTERVAL = 30000;  // 30s per reveal after first
+const MIN_REVEAL_INTERVAL = 30000;  // 30s between reveals (after first)
 
 /* =========================
    APP + SERVER
@@ -68,6 +68,10 @@ let cachedHint = null;
 ========================= */
 
 let twitchSay = () => {};
+
+/* =========================
+   START CHAT
+========================= */
 
 startTwitch((platform, user, msg, say) => {
   twitchSay = say;
@@ -147,7 +151,9 @@ async function startRound() {
     currentWordText = game.masked();
     send("word", { value: currentWordText });
 
-    if (!currentWordText.includes("_")) endRound(null);
+    if (!currentWordText.includes("_")) {
+      endRound(null);
+    }
   }, revealInterval);
 
   roundTimeout = setTimeout(() => {
@@ -165,12 +171,18 @@ async function startRound() {
     currentWordText = game.word;
     send("word", { value: currentWordText });
 
-    let remaining = 30;
+    /* ✅ RESTORED OVERLAY WINNER */
+    if (winner) {
+      send("winner", { name: winner });
+    }
+
+    let remaining = AFTER_REVEAL_DELAY / 1000;
     send("countdown", { seconds: remaining });
 
     countdownTimer = setInterval(() => {
       remaining--;
       send("countdown", { seconds: remaining });
+
       if (remaining <= 0) {
         clearInterval(countdownTimer);
         if (WORD_ACTIVE) startRound();
@@ -197,12 +209,15 @@ async function onChat(platform, user, msg) {
 
   if (msg === "!endword" && isOwner) {
     WORD_ACTIVE = false;
+
     clearInterval(revealTimer);
     clearTimeout(roundTimeout);
     clearTimeout(firstRevealTimeout);
     clearInterval(countdownTimer);
+
     currentWordText = "WORD GAME ENDED";
     send("word", { value: currentWordText });
+
     twitchSay("🛑 Word game ended.");
     return;
   }
@@ -215,8 +230,10 @@ async function onChat(platform, user, msg) {
   if (msg === "!hint") {
     if (!WORD_ACTIVE) return twitchSay("❌ No active word.");
     if (hintUsed) return twitchSay("⛔ Hint already used!");
+
     hintUsed = true;
     cachedHint ??= await fetchDefinition(game.word);
+
     twitchSay(
       cachedHint ? `💡 Hint: ${cachedHint}` : "💡 No definition found."
     );
@@ -226,8 +243,11 @@ async function onChat(platform, user, msg) {
   if (!WORD_ACTIVE || !msg.startsWith("!guess ")) return;
 
   const guess = msg.split(" ")[1];
+  if (!guess) return;
+
   if (game.check(guess)) {
     leaderboard[user] = (leaderboard[user] || 0) + 1;
+
     twitchSay(`🎉 ${user} guessed the word correctly!`);
     startRound.endRound(user);
   }
