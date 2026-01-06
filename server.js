@@ -1,45 +1,54 @@
-process.on("unhandledRejection", err => {
-  console.error("Unhandled rejection:", err);
-});
-
-process.on("uncaughtException", err => {
-  console.error("Uncaught exception:", err);
-});
-
 import express from "express";
 import { WebSocketServer } from "ws";
 import { WordGame } from "./game.js";
 import { startKick } from "./chat/kick.js";
 import { startTwitch } from "./chat/twitch.js";
 
+process.on("unhandledRejection", err => console.error(err));
+process.on("uncaughtException", err => console.error(err));
+
 const app = express();
 app.use(express.static("public"));
 
-const server = app.listen(process.env.PORT || 3000);
-const wss = new WebSocketServer({ server, path: "/ws" });
+const server = app.listen(process.env.PORT || 3000, () => {
+  console.log("Server running");
+});
+
+/* =========================
+   WEBSOCKET SERVER
+========================= */
 
 let overlaySocket = null;
 
-wss.on("connection", (ws) => {
+/* 🔴 DEFINE send() FIRST */
+function send(type, payload = {}) {
+  if (!overlaySocket) return;
+  overlaySocket.send(JSON.stringify({ type, ...payload }));
+}
+
+/* 🔴 THEN CREATE WS SERVER */
+const wss = new WebSocketServer({ server, path: "/ws" });
+
+/* 🔴 HANDLE CONNECTION */
+wss.on("connection", ws => {
   console.log("OVERLAY CONNECTED");
   overlaySocket = ws;
 
-  // Send current state immediately
-  if (!WORD_ACTIVE) {
-    send("word", { value: "WAITING FOR !WORD" });
-  } else {
-    send("word", { value: game.masked() });
-    if (KVT_ACTIVE) send("battle", score);
-  }
+  // Send initial state
+  send("word", { value: "WAITING FOR !WORD" });
 
   ws.on("close", () => {
     console.log("OVERLAY DISCONNECTED");
     overlaySocket = null;
   });
-})
+});
+
+/* =========================
+   GAME LOGIC
+========================= */
 
 const game = new WordGame();
-const score = { kick: 0, twitch: 0 };
+const score = { twitch: 0, kick: 0 };
 
 let WORD_ACTIVE = false;
 let KVT_ACTIVE = false;
@@ -57,6 +66,8 @@ async function startRound() {
 }
 
 function onChat(platform, user, msg) {
+  console.log("CHAT:", platform, user, msg);
+
   const isOwner = user === process.env.OWNER_NAME;
 
   if (msg === "!word" && isOwner) {
@@ -75,8 +86,8 @@ function onChat(platform, user, msg) {
 
   if (msg === "!kvt" && isOwner) {
     KVT_ACTIVE = true;
-    score.kick = 0;
     score.twitch = 0;
+    score.kick = 0;
     send("battle", score);
     return;
   }
@@ -100,7 +111,9 @@ function onChat(platform, user, msg) {
   }
 }
 
+/* =========================
+   START CHAT
+========================= */
+
 startKick(onChat);
 startTwitch(onChat);
-
-
