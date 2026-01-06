@@ -3,6 +3,7 @@ import { WebSocketServer } from "ws";
 import { WordGame } from "./game.js";
 import { startKick } from "./chat/kick.js";
 import { startTwitch } from "./chat/twitch.js";
+import { getSafeEnglishWord } from "./wordSource.js";
 
 /* =========================
    CONFIG
@@ -46,8 +47,9 @@ wss.on("connection", (ws) => {
    GAME STATE
 ========================= */
 
-const game = new WordGame();
-let currentWordText = "WAITING FOR !WORD";
+const game = new WordGame(getSafeEnglishWord);
+
+let currentWordText = "LOADING WORD";
 let WORD_ACTIVE = false;
 
 let revealTimer = null;
@@ -56,6 +58,10 @@ let countdownTimer = null;
 
 /* 🏆 RESET EVERY STREAM */
 const leaderboard = {}; // { username: score }
+
+/* 💡 HINT STATE (per word) */
+let hintUsed = false;
+let cachedHint = null;
 
 /* =========================
    CHAT OUTPUT
@@ -95,6 +101,18 @@ function leaderboardText() {
   );
 }
 
+async function fetchDefinition(word) {
+  try {
+    const res = await fetch(
+      `https://api.dictionaryapi.dev/api/v2/entries/en/${word}`
+    );
+    const data = await res.json();
+    return data?.[0]?.meanings?.[0]?.definitions?.[0]?.definition || null;
+  } catch {
+    return null;
+  }
+}
+
 /* =========================
    GAME LOGIC
 ========================= */
@@ -105,6 +123,10 @@ async function startRound() {
   clearInterval(revealTimer);
   clearTimeout(roundTimeout);
   clearInterval(countdownTimer);
+
+  /* reset hint */
+  hintUsed = false;
+  cachedHint = null;
 
   currentWordText = game.masked();
   send("word", { value: currentWordText });
@@ -169,9 +191,10 @@ async function startRound() {
    CHAT HANDLER
 ========================= */
 
-function onChat(platform, user, msg) {
+async function onChat(platform, user, msg) {
   const isOwner = user === process.env.OWNER_NAME;
 
+  /* START GAME */
   if (msg === "!word" && isOwner) {
     WORD_ACTIVE = true;
     startRound();
@@ -179,6 +202,7 @@ function onChat(platform, user, msg) {
     return;
   }
 
+  /* END GAME */
   if (msg === "!endword" && isOwner) {
     WORD_ACTIVE = false;
 
@@ -195,12 +219,39 @@ function onChat(platform, user, msg) {
     return;
   }
 
-  /* 🏆 LEADERBOARD COMMAND */
+  /* LEADERBOARD */
   if (msg === "!gamelb") {
     twitchSay(leaderboardText());
     return;
   }
 
+  /* HINT (ONCE PER WORD) */
+  if (msg === "!hint") {
+    if (!WORD_ACTIVE) {
+      twitchSay("❌ No active word right now.");
+      return;
+    }
+
+    if (hintUsed) {
+      twitchSay("⛔ Hint already used for this word!");
+      return;
+    }
+
+    hintUsed = true;
+
+    if (!cachedHint) {
+      cachedHint = await fetchDefinition(game.word);
+    }
+
+    twitchSay(
+      cachedHint
+        ? `💡 Hint: ${cachedHint}`
+        : "💡 Hint: No definition found."
+    );
+    return;
+  }
+
+  /* GUESS */
   if (!WORD_ACTIVE) return;
   if (!msg.startsWith("!guess ")) return;
 
