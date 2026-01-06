@@ -20,9 +20,17 @@ const wss = new WebSocketServer({ server, path: "/ws" });
 
 let overlaySocket = null;
 
-wss.on("connection", (ws, req) => {
+wss.on("connection", (ws) => {
   console.log("OVERLAY CONNECTED");
   overlaySocket = ws;
+
+  // Send current state immediately
+  if (!WORD_ACTIVE) {
+    send("word", { value: "WAITING FOR !WORD" });
+  } else {
+    send("word", { value: game.masked() });
+    if (KVT_ACTIVE) send("battle", score);
+  }
 
   ws.on("close", () => {
     console.log("OVERLAY DISCONNECTED");
@@ -95,4 +103,4 @@ function onChat(platform, user, msg) {
 startKick(onChat);
 startTwitch(onChat);
 
-send("word", { value: "WAITING FOR !WORD" });
+
