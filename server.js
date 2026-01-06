@@ -11,7 +11,7 @@ import { getSafeEnglishWord } from "./wordSource.js";
 
 const ROUND_DURATION = 180000;      // 3 minutes
 const AFTER_REVEAL_DELAY = 30000;   // 30s before next word
-const MIN_REVEAL_INTERVAL = 20000;  // min 20s between reveals
+const MIN_REVEAL_INTERVAL = 30000;  // 30s per reveal after first
 
 /* =========================
    APP + SERVER
@@ -40,7 +40,6 @@ const wss = new WebSocketServer({ server, path: "/ws" });
 wss.on("connection", (ws) => {
   overlaySocket = ws;
   send("word", { value: currentWordText });
-  send("leaderboard", getLeaderboard());
 });
 
 /* =========================
@@ -55,11 +54,12 @@ let WORD_ACTIVE = false;
 let revealTimer = null;
 let roundTimeout = null;
 let countdownTimer = null;
+let firstRevealTimeout = null;
 
 /* 🏆 RESET EVERY STREAM */
-const leaderboard = {}; // { username: score }
+const leaderboard = {};
 
-/* 💡 HINT STATE (per word) */
+/* 💡 HINT STATE */
 let hintUsed = false;
 let cachedHint = null;
 
@@ -68,10 +68,6 @@ let cachedHint = null;
 ========================= */
 
 let twitchSay = () => {};
-
-/* =========================
-   START CHAT
-========================= */
 
 startTwitch((platform, user, msg, say) => {
   twitchSay = say;
@@ -87,17 +83,15 @@ startKick(onChat);
 function getLeaderboard() {
   return Object.entries(leaderboard)
     .sort((a, b) => b[1] - a[1])
-    .slice(0, 5)
-    .map(([name, score]) => ({ name, score }));
+    .slice(0, 5);
 }
 
 function leaderboardText() {
   const top = getLeaderboard();
-  if (top.length === 0) return "🏆 Game leaderboard is empty.";
-
+  if (!top.length) return "🏆 Game leaderboard is empty.";
   return (
     "🏆 Game Leaderboard: " +
-    top.map((u, i) => `${i + 1}) ${u.name}(${u.score})`).join(" ")
+    top.map((u, i) => `${i + 1}) ${u[0]}(${u[1]})`).join(" ")
   );
 }
 
@@ -123,18 +117,22 @@ async function startRound() {
   clearInterval(revealTimer);
   clearTimeout(roundTimeout);
   clearInterval(countdownTimer);
+  clearTimeout(firstRevealTimeout);
 
-  /* reset hint */
   hintUsed = false;
   cachedHint = null;
 
   currentWordText = game.masked();
   send("word", { value: currentWordText });
-  send("winner", { name: "" });
-  send("countdown", { seconds: 0 });
+
+  /* 🔥 FIRST REVEAL AFTER 10s */
+  firstRevealTimeout = setTimeout(() => {
+    game.revealRandom();
+    currentWordText = game.masked();
+    send("word", { value: currentWordText });
+  }, 10000);
 
   const hiddenLetters = game.word.length - 2;
-
   const calculatedInterval =
     hiddenLetters > 0 ? ROUND_DURATION / hiddenLetters : ROUND_DURATION;
 
@@ -149,9 +147,7 @@ async function startRound() {
     currentWordText = game.masked();
     send("word", { value: currentWordText });
 
-    if (!currentWordText.includes("_")) {
-      endRound(null);
-    }
+    if (!currentWordText.includes("_")) endRound(null);
   }, revealInterval);
 
   roundTimeout = setTimeout(() => {
@@ -164,11 +160,10 @@ async function startRound() {
 
     clearInterval(revealTimer);
     clearTimeout(roundTimeout);
+    clearTimeout(firstRevealTimeout);
 
     currentWordText = game.word;
     send("word", { value: currentWordText });
-
-    if (winner) send("winner", { name: winner });
 
     let remaining = 30;
     send("countdown", { seconds: remaining });
@@ -176,7 +171,6 @@ async function startRound() {
     countdownTimer = setInterval(() => {
       remaining--;
       send("countdown", { seconds: remaining });
-
       if (remaining <= 0) {
         clearInterval(countdownTimer);
         if (WORD_ACTIVE) startRound();
@@ -194,7 +188,6 @@ async function startRound() {
 async function onChat(platform, user, msg) {
   const isOwner = user === process.env.OWNER_NAME;
 
-  /* START GAME */
   if (msg === "!word" && isOwner) {
     WORD_ACTIVE = true;
     startRound();
@@ -202,70 +195,40 @@ async function onChat(platform, user, msg) {
     return;
   }
 
-  /* END GAME */
   if (msg === "!endword" && isOwner) {
     WORD_ACTIVE = false;
-
     clearInterval(revealTimer);
     clearTimeout(roundTimeout);
+    clearTimeout(firstRevealTimeout);
     clearInterval(countdownTimer);
-
     currentWordText = "WORD GAME ENDED";
     send("word", { value: currentWordText });
-    send("winner", { name: "" });
-    send("countdown", { seconds: 0 });
-
     twitchSay("🛑 Word game ended.");
     return;
   }
 
-  /* LEADERBOARD */
   if (msg === "!gamelb") {
     twitchSay(leaderboardText());
     return;
   }
 
-  /* HINT (ONCE PER WORD) */
   if (msg === "!hint") {
-    if (!WORD_ACTIVE) {
-      twitchSay("❌ No active word right now.");
-      return;
-    }
-
-    if (hintUsed) {
-      twitchSay("⛔ Hint already used for this word!");
-      return;
-    }
-
+    if (!WORD_ACTIVE) return twitchSay("❌ No active word.");
+    if (hintUsed) return twitchSay("⛔ Hint already used!");
     hintUsed = true;
-
-    if (!cachedHint) {
-      cachedHint = await fetchDefinition(game.word);
-    }
-
+    cachedHint ??= await fetchDefinition(game.word);
     twitchSay(
-      cachedHint
-        ? `💡 Hint: ${cachedHint}`
-        : "💡 Hint: No definition found."
+      cachedHint ? `💡 Hint: ${cachedHint}` : "💡 No definition found."
     );
     return;
   }
 
-  /* GUESS */
-  if (!WORD_ACTIVE) return;
-  if (!msg.startsWith("!guess ")) return;
+  if (!WORD_ACTIVE || !msg.startsWith("!guess ")) return;
 
   const guess = msg.split(" ")[1];
-  if (!guess) return;
-
   if (game.check(guess)) {
     leaderboard[user] = (leaderboard[user] || 0) + 1;
-
-    send("leaderboard", getLeaderboard());
-    send("win");
-
     twitchSay(`🎉 ${user} guessed the word correctly!`);
-
     startRound.endRound(user);
   }
 }
