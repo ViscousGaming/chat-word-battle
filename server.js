@@ -16,19 +16,19 @@ const app = express();
 app.use(express.static("public"));
 
 const server = app.listen(process.env.PORT || 3000);
-const wss = new WebSocketServer({ server });
+const wss = new WebSocketServer({ server, path: "/ws" });
 
 let overlaySocket = null;
 
-wss.on("connection", ws => {
+wss.on("connection", (ws, req) => {
+  console.log("OVERLAY CONNECTED");
   overlaySocket = ws;
-});
 
-function send(type, payload = {}) {
-  if (overlaySocket) {
-    overlaySocket.send(JSON.stringify({ type, ...payload }));
-  }
-}
+  ws.on("close", () => {
+    console.log("OVERLAY DISCONNECTED");
+    overlaySocket = null;
+  });
+})
 
 const game = new WordGame();
 const score = { kick: 0, twitch: 0 };

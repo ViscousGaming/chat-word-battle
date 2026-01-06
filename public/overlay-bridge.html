@@ -16,7 +16,7 @@
   <script>
     const iframe = document.getElementById("overlay");
 
-    const ws = new WebSocket("wss://chat-word-battle.up.railway.app");
+    const ws = new WebSocket("wss://chat-word-battle.up.railway.app/ws");
 
     ws.onopen = () => {
       console.log("Overlay bridge connected to server");
