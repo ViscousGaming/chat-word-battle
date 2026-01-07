@@ -9,9 +9,9 @@ import { getSafeEnglishWord } from "./wordSource.js";
    CONFIG
 ========================= */
 
-const ROUND_DURATION = 180000;      // 3 minutes
-const AFTER_REVEAL_DELAY = 30000;   // 30s before next word
-const MIN_REVEAL_INTERVAL = 30000;  // 30s between reveals (after first)
+const ROUND_DURATION = 180000;     // 3 minutes
+const AFTER_REVEAL_DELAY = 30000;  // 30s before next word
+const MIN_REVEAL_INTERVAL = 30000; // 30s per reveal
 
 /* =========================
    APP + SERVER
@@ -43,10 +43,34 @@ wss.on("connection", (ws) => {
 });
 
 /* =========================
+   WORD MEMORY (ANTI REPEAT)
+========================= */
+
+const USED_WORDS = new Set();
+const MAX_USED_WORDS = 50;
+
+async function getUniqueWord() {
+  for (let i = 0; i < 10; i++) {
+    const word = await getSafeEnglishWord();
+    if (!USED_WORDS.has(word)) {
+      USED_WORDS.add(word);
+
+      if (USED_WORDS.size > MAX_USED_WORDS) {
+        const first = USED_WORDS.values().next().value;
+        USED_WORDS.delete(first);
+      }
+
+      return word;
+    }
+  }
+  return getSafeEnglishWord();
+}
+
+/* =========================
    GAME STATE
 ========================= */
 
-const game = new WordGame(getSafeEnglishWord);
+const game = new WordGame(getUniqueWord);
 
 let currentWordText = "LOADING WORD";
 let WORD_ACTIVE = false;
@@ -55,11 +79,12 @@ let revealTimer = null;
 let roundTimeout = null;
 let countdownTimer = null;
 let firstRevealTimeout = null;
+let reminderInterval = null;
 
-/* 🏆 RESET EVERY STREAM */
+/* Leaderboard resets every stream */
 const leaderboard = {};
 
-/* 💡 HINT STATE */
+/* Hint state */
 let hintUsed = false;
 let cachedHint = null;
 
@@ -84,18 +109,16 @@ startKick(onChat);
    HELPERS
 ========================= */
 
-function getLeaderboard() {
-  return Object.entries(leaderboard)
+function leaderboardText() {
+  const entries = Object.entries(leaderboard)
     .sort((a, b) => b[1] - a[1])
     .slice(0, 5);
-}
 
-function leaderboardText() {
-  const top = getLeaderboard();
-  if (!top.length) return "🏆 Game leaderboard is empty.";
+  if (!entries.length) return "🏆 Leaderboard is empty.";
+
   return (
-    "🏆 Game Leaderboard: " +
-    top.map((u, i) => `${i + 1}) ${u[0]}(${u[1]})`).join(" ")
+    "🏆 Leaderboard: " +
+    entries.map((e, i) => `${i + 1}) ${e[0]}(${e[1]})`).join(" ")
   );
 }
 
@@ -120,8 +143,8 @@ async function startRound() {
 
   clearInterval(revealTimer);
   clearTimeout(roundTimeout);
-  clearInterval(countdownTimer);
   clearTimeout(firstRevealTimeout);
+  clearInterval(countdownTimer);
 
   hintUsed = false;
   cachedHint = null;
@@ -129,7 +152,7 @@ async function startRound() {
   currentWordText = game.masked();
   send("word", { value: currentWordText });
 
-  /* 🔥 FIRST REVEAL AFTER 10s */
+  /* First reveal after 10s */
   firstRevealTimeout = setTimeout(() => {
     game.revealRandom();
     currentWordText = game.masked();
@@ -137,32 +160,28 @@ async function startRound() {
   }, 10000);
 
   const hiddenLetters = game.word.length - 2;
-  const calculatedInterval =
-    hiddenLetters > 0 ? ROUND_DURATION / hiddenLetters : ROUND_DURATION;
+  const interval =
+    Math.max(ROUND_DURATION / hiddenLetters, MIN_REVEAL_INTERVAL);
 
-  const revealInterval = Math.max(calculatedInterval, MIN_REVEAL_INTERVAL);
-
-  let roundEnded = false;
+  let ended = false;
 
   revealTimer = setInterval(() => {
-    if (roundEnded) return;
+    if (ended) return;
 
     game.revealRandom();
     currentWordText = game.masked();
     send("word", { value: currentWordText });
 
-    if (!currentWordText.includes("_")) {
-      endRound(null);
-    }
-  }, revealInterval);
+    if (!currentWordText.includes("_")) endRound(null);
+  }, interval);
 
   roundTimeout = setTimeout(() => {
-    if (!roundEnded) endRound(null);
+    if (!ended) endRound(null);
   }, ROUND_DURATION);
 
   function endRound(winner) {
-    if (roundEnded) return;
-    roundEnded = true;
+    if (ended) return;
+    ended = true;
 
     clearInterval(revealTimer);
     clearTimeout(roundTimeout);
@@ -171,19 +190,16 @@ async function startRound() {
     currentWordText = game.word;
     send("word", { value: currentWordText });
 
-    /* ✅ RESTORED OVERLAY WINNER */
-    if (winner) {
-      send("winner", { name: winner });
-    }
+    if (winner) send("winner", { name: winner });
 
-    let remaining = AFTER_REVEAL_DELAY / 1000;
-    send("countdown", { seconds: remaining });
+    let seconds = AFTER_REVEAL_DELAY / 1000;
+    send("countdown", { seconds });
 
     countdownTimer = setInterval(() => {
-      remaining--;
-      send("countdown", { seconds: remaining });
+      seconds--;
+      send("countdown", { seconds });
 
-      if (remaining <= 0) {
+      if (seconds <= 0) {
         clearInterval(countdownTimer);
         if (WORD_ACTIVE) startRound();
       }
@@ -203,7 +219,17 @@ async function onChat(platform, user, msg) {
   if (msg === "!word" && isOwner) {
     WORD_ACTIVE = true;
     startRound();
+
     twitchSay("🎮 Word game started! Type !guess <word>");
+
+    clearInterval(reminderInterval);
+    reminderInterval = setInterval(() => {
+      if (!WORD_ACTIVE) return;
+      twitchSay(
+        "🎮 Commands: !guess <word> | !hint | !myscore | !gamelb"
+      );
+    }, 300000);
+
     return;
   }
 
@@ -214,6 +240,7 @@ async function onChat(platform, user, msg) {
     clearTimeout(roundTimeout);
     clearTimeout(firstRevealTimeout);
     clearInterval(countdownTimer);
+    clearInterval(reminderInterval);
 
     currentWordText = "WORD GAME ENDED";
     send("word", { value: currentWordText });
@@ -224,6 +251,11 @@ async function onChat(platform, user, msg) {
 
   if (msg === "!gamelb") {
     twitchSay(leaderboardText());
+    return;
+  }
+
+  if (msg === "!myscore") {
+    twitchSay(`📊 ${user}, your score is ${leaderboard[user] || 0}`);
     return;
   }
 
@@ -247,7 +279,6 @@ async function onChat(platform, user, msg) {
 
   if (game.check(guess)) {
     leaderboard[user] = (leaderboard[user] || 0) + 1;
-
     twitchSay(`🎉 ${user} guessed the word correctly!`);
     startRound.endRound(user);
   }
