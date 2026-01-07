@@ -9,9 +9,9 @@ import { getSafeEnglishWord } from "./wordSource.js";
    CONFIG
 ========================= */
 
-const ROUND_DURATION = 180000;      // 3 minutes
-const AFTER_REVEAL_DELAY = 30000;   // 30s before next word
-const MIN_REVEAL_INTERVAL = 30000;  // 30s between reveals (after first)
+const ROUND_DURATION = 180000;
+const AFTER_REVEAL_DELAY = 30000;
+const MIN_REVEAL_INTERVAL = 30000;
 
 /* =========================
    APP + SERVER
@@ -31,35 +31,57 @@ const server = app.listen(process.env.PORT || 3000, () => {
 let overlaySocket = null;
 
 function send(type, payload = {}) {
-  if (!overlaySocket) return;
-  overlaySocket.send(JSON.stringify({ type, ...payload }));
+  if (overlaySocket) {
+    overlaySocket.send(JSON.stringify({ type, ...payload }));
+  }
 }
 
 const wss = new WebSocketServer({ server, path: "/ws" });
-
 wss.on("connection", (ws) => {
   overlaySocket = ws;
   send("word", { value: currentWordText });
 });
 
 /* =========================
+   WORD MEMORY (NO REPEATS)
+========================= */
+
+const USED_WORDS = new Set();
+const MAX_USED_WORDS = 50;
+
+async function getUniqueWord() {
+  for (let i = 0; i < 10; i++) {
+    const w = await getSafeEnglishWord();
+    if (!USED_WORDS.has(w)) {
+      USED_WORDS.add(w);
+      if (USED_WORDS.size > MAX_USED_WORDS) {
+        USED_WORDS.delete(USED_WORDS.values().next().value);
+      }
+      return w;
+    }
+  }
+  return getSafeEnglishWord();
+}
+
+/* =========================
    GAME STATE
 ========================= */
 
-const game = new WordGame(getSafeEnglishWord);
+const game = new WordGame(getUniqueWord);
 
 let currentWordText = "LOADING WORD";
 let WORD_ACTIVE = false;
+let KVT_ACTIVE = false;
 
 let revealTimer = null;
 let roundTimeout = null;
 let countdownTimer = null;
 let firstRevealTimeout = null;
+let reminderInterval = null;
 
-/* 🏆 RESET EVERY STREAM */
 const leaderboard = {};
+const platformScore = { twitch: 0, kick: 0 };
 
-/* 💡 HINT STATE */
 let hintUsed = false;
 let cachedHint = null;
 
@@ -68,6 +90,12 @@ let cachedHint = null;
 ========================= */
 
 let twitchSay = () => {};
+let kickSay = () => {};
+
+function sayAll(msg) {
+  twitchSay(msg);
+  kickSay(msg);
+}
 
 /* =========================
    START CHAT
@@ -78,34 +106,29 @@ startTwitch((platform, user, msg, say) => {
   onChat(platform, user, msg);
 });
 
-startKick(onChat);
+startKick(onChat, (say) => {
+  kickSay = say;
+});
 
 /* =========================
    HELPERS
 ========================= */
 
-function getLeaderboard() {
-  return Object.entries(leaderboard)
+function leaderboardText() {
+  const list = Object.entries(leaderboard)
     .sort((a, b) => b[1] - a[1])
     .slice(0, 5);
-}
 
-function leaderboardText() {
-  const top = getLeaderboard();
-  if (!top.length) return "🏆 Game leaderboard is empty.";
-  return (
-    "🏆 Game Leaderboard: " +
-    top.map((u, i) => `${i + 1}) ${u[0]}(${u[1]})`).join(" ")
-  );
+  if (!list.length) return "🏆 Leaderboard is empty.";
+  return "🏆 Leaderboard: " +
+    list.map((e, i) => `${i + 1}) ${e[0]}(${e[1]})`).join(" ");
 }
 
 async function fetchDefinition(word) {
   try {
-    const res = await fetch(
-      `https://api.dictionaryapi.dev/api/v2/entries/en/${word}`
-    );
-    const data = await res.json();
-    return data?.[0]?.meanings?.[0]?.definitions?.[0]?.definition || null;
+    const r = await fetch(`https://api.dictionaryapi.dev/api/v2/entries/en/${word}`);
+    const d = await r.json();
+    return d?.[0]?.meanings?.[0]?.definitions?.[0]?.definition || null;
   } catch {
     return null;
   }
@@ -120,8 +143,8 @@ async function startRound() {
 
   clearInterval(revealTimer);
   clearTimeout(roundTimeout);
-  clearInterval(countdownTimer);
   clearTimeout(firstRevealTimeout);
+  clearInterval(countdownTimer);
 
   hintUsed = false;
   cachedHint = null;
@@ -129,40 +152,32 @@ async function startRound() {
   currentWordText = game.masked();
   send("word", { value: currentWordText });
 
-  /* 🔥 FIRST REVEAL AFTER 10s */
   firstRevealTimeout = setTimeout(() => {
     game.revealRandom();
     currentWordText = game.masked();
     send("word", { value: currentWordText });
   }, 10000);
 
-  const hiddenLetters = game.word.length - 2;
-  const calculatedInterval =
-    hiddenLetters > 0 ? ROUND_DURATION / hiddenLetters : ROUND_DURATION;
+  const hidden = game.word.length - 2;
+  const interval = Math.max(ROUND_DURATION / hidden, MIN_REVEAL_INTERVAL);
 
-  const revealInterval = Math.max(calculatedInterval, MIN_REVEAL_INTERVAL);
-
-  let roundEnded = false;
+  let ended = false;
 
   revealTimer = setInterval(() => {
-    if (roundEnded) return;
-
+    if (ended) return;
     game.revealRandom();
     currentWordText = game.masked();
     send("word", { value: currentWordText });
-
-    if (!currentWordText.includes("_")) {
-      endRound(null);
-    }
-  }, revealInterval);
+    if (!currentWordText.includes("_")) endRound(null);
+  }, interval);
 
   roundTimeout = setTimeout(() => {
-    if (!roundEnded) endRound(null);
+    if (!ended) endRound(null);
   }, ROUND_DURATION);
 
   function endRound(winner) {
-    if (roundEnded) return;
-    roundEnded = true;
+    if (ended) return;
+    ended = true;
 
     clearInterval(revealTimer);
     clearTimeout(roundTimeout);
@@ -171,19 +186,15 @@ async function startRound() {
     currentWordText = game.word;
     send("word", { value: currentWordText });
 
-    /* ✅ RESTORED OVERLAY WINNER */
-    if (winner) {
-      send("winner", { name: winner });
-    }
+    if (winner) send("winner", { name: winner });
 
-    let remaining = AFTER_REVEAL_DELAY / 1000;
-    send("countdown", { seconds: remaining });
+    let s = AFTER_REVEAL_DELAY / 1000;
+    send("countdown", { seconds: s });
 
     countdownTimer = setInterval(() => {
-      remaining--;
-      send("countdown", { seconds: remaining });
-
-      if (remaining <= 0) {
+      s--;
+      send("countdown", { seconds: s });
+      if (s <= 0) {
         clearInterval(countdownTimer);
         if (WORD_ACTIVE) startRound();
       }
@@ -203,52 +214,69 @@ async function onChat(platform, user, msg) {
   if (msg === "!word" && isOwner) {
     WORD_ACTIVE = true;
     startRound();
-    twitchSay("🎮 Word game started! Type !guess <word>");
+    sayAll("🎮 Word game started! Type !guess <word>");
+
+    clearInterval(reminderInterval);
+    reminderInterval = setInterval(() => {
+      if (WORD_ACTIVE) {
+        sayAll("🎮 Commands: !guess <word> | !hint | !myscore | !gamelb | !kvt");
+      }
+    }, 300000);
+    return;
+  }
+
+  if (msg === "!kvt" && isOwner) {
+    KVT_ACTIVE = true;
+    WORD_ACTIVE = true;
+    startRound();
+    sayAll("⚔️ Kick vs Twitch started! First correct guess wins!");
+    return;
+  }
+
+  if (msg === "!kvtscore") {
+    sayAll(`⚔️ Kick ${platformScore.kick} | Twitch ${platformScore.twitch}`);
+    return;
+  }
+
+  if (msg === "!endkvt" && isOwner) {
+    KVT_ACTIVE = false;
+    sayAll("🛑 Kick vs Twitch ended.");
     return;
   }
 
   if (msg === "!endword" && isOwner) {
     WORD_ACTIVE = false;
-
-    clearInterval(revealTimer);
-    clearTimeout(roundTimeout);
-    clearTimeout(firstRevealTimeout);
-    clearInterval(countdownTimer);
-
+    clearInterval(reminderInterval);
     currentWordText = "WORD GAME ENDED";
     send("word", { value: currentWordText });
-
-    twitchSay("🛑 Word game ended.");
+    sayAll("🛑 Word game ended.");
     return;
   }
 
-  if (msg === "!gamelb") {
-    twitchSay(leaderboardText());
-    return;
-  }
+  if (msg === "!gamelb") return sayAll(leaderboardText());
+  if (msg === "!myscore") return sayAll(`📊 ${user}, your score is ${leaderboard[user] || 0}`);
 
   if (msg === "!hint") {
-    if (!WORD_ACTIVE) return twitchSay("❌ No active word.");
-    if (hintUsed) return twitchSay("⛔ Hint already used!");
-
+    if (!WORD_ACTIVE) return sayAll("❌ No active word.");
+    if (hintUsed) return sayAll("⛔ Hint already used!");
     hintUsed = true;
     cachedHint ??= await fetchDefinition(game.word);
-
-    twitchSay(
-      cachedHint ? `💡 Hint: ${cachedHint}` : "💡 No definition found."
-    );
-    return;
+    return sayAll(cachedHint ? `💡 Hint: ${cachedHint}` : "💡 No definition found.");
   }
 
   if (!WORD_ACTIVE || !msg.startsWith("!guess ")) return;
 
   const guess = msg.split(" ")[1];
-  if (!guess) return;
-
   if (game.check(guess)) {
     leaderboard[user] = (leaderboard[user] || 0) + 1;
 
-    twitchSay(`🎉 ${user} guessed the word correctly!`);
+    if (KVT_ACTIVE) {
+      platformScore[platform]++;
+      sayAll(`🏆 ${platform.toUpperCase()} wins! (${user})`);
+    } else {
+      sayAll(`🎉 ${user} guessed the word correctly!`);
+    }
+
     startRound.endRound(user);
   }
 }
