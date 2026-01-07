@@ -1,38 +1,47 @@
 import WebSocket from "ws";
 
-let kickSocket = null;
-let sayCallback = null;
-
 export function startKick(onMessage, onSay) {
-  kickSocket = new WebSocket("wss://chat.kick.com");
+  let ws;
+  let say = () => {};
 
-  kickSocket.on("open", () => {
-    kickSocket.send(JSON.stringify({
-      event: "join",
-      data: { channel: process.env.KICK_CHANNEL }
-    }));
-  });
+  try {
+    ws = new WebSocket("wss://chat.kick.com");
 
-  kickSocket.on("message", (raw) => {
-    try {
-      const msg = JSON.parse(raw);
-      if (msg.event !== "chat_message") return;
+    ws.on("open", () => {
+      console.log("🟢 Connected to Kick chat");
+      ws.send(JSON.stringify({
+        event: "join",
+        data: { channel: process.env.KICK_CHANNEL }
+      }));
+    });
 
-      const user = msg.data.sender.username;
-      const text = msg.data.content;
+    ws.on("message", (raw) => {
+      try {
+        const msg = JSON.parse(raw);
+        if (msg?.event !== "chat_message") return;
 
-      onMessage("kick", user, text);
-    } catch {}
-  });
+        onMessage("kick", msg.data.sender.username, msg.data.content);
+      } catch {}
+    });
 
-  // expose say() for server.js
-  sayCallback = onSay;
-  sayCallback((text) => {
-    if (!kickSocket || kickSocket.readyState !== 1) return;
+    ws.on("error", (err) => {
+      console.error("⚠️ Kick chat unavailable:", err.message);
+    });
 
-    kickSocket.send(JSON.stringify({
-      event: "send_message",
-      data: { content: text }
-    }));
-  });
+    ws.on("close", () => {
+      console.warn("⚠️ Kick socket closed (ignored)");
+    });
+
+    onSay((text) => {
+      if (ws?.readyState === 1) {
+        ws.send(JSON.stringify({
+          event: "send_message",
+          data: { content: text }
+        }));
+      }
+    });
+
+  } catch (err) {
+    console.error("❌ Kick disabled:", err.message);
+  }
 }
