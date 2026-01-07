@@ -1,14 +1,13 @@
 import WebSocket from "ws";
 
 export function startKick(onMessage, onSay) {
-  let ws;
-  let say = () => {};
+  let ws = null;
 
   try {
     ws = new WebSocket("wss://chat.kick.com");
 
     ws.on("open", () => {
-      console.log("🟢 Connected to Kick chat");
+      console.log("🟢 Kick chat connected");
       ws.send(JSON.stringify({
         event: "join",
         data: { channel: process.env.KICK_CHANNEL }
@@ -25,15 +24,15 @@ export function startKick(onMessage, onSay) {
     });
 
     ws.on("error", (err) => {
-      console.error("⚠️ Kick chat unavailable:", err.message);
+      console.warn("⚠️ Kick chat error (ignored):", err.message);
     });
 
     ws.on("close", () => {
-      console.warn("⚠️ Kick socket closed (ignored)");
+      console.warn("⚠️ Kick chat closed (ignored)");
     });
 
     onSay((text) => {
-      if (ws?.readyState === 1) {
+      if (ws && ws.readyState === 1) {
         ws.send(JSON.stringify({
           event: "send_message",
           data: { content: text }
@@ -42,6 +41,6 @@ export function startKick(onMessage, onSay) {
     });
 
   } catch (err) {
-    console.error("❌ Kick disabled:", err.message);
+    console.warn("⚠️ Kick chat disabled:", err.message);
   }
 }
